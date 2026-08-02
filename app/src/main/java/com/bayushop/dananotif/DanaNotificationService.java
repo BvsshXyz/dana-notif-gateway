@@ -28,9 +28,9 @@ public class DanaNotificationService extends NotificationListenerService {
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
-        if (sbn == null || !DANA_PACKAGE.equals(sbn.getPackageName())) {
-            return;
-        }
+        if (sbn == null) {
+    return;
+}
 
         Notification notification = sbn.getNotification();
         if (notification == null || notification.extras == null) {
@@ -140,20 +140,22 @@ public class DanaNotificationService extends NotificationListenerService {
     }
 
     private static boolean looksLikeIncomingPayment(String content) {
-        String lower = content.toLowerCase(Locale.ROOT);
-        boolean mentionsMoney = lower.contains("rp") || lower.contains("uang") || lower.contains("saldo");
-        boolean incoming = lower.contains("masuk")
-                || lower.contains("menerima")
-                || lower.contains("diterima")
-                || lower.contains("berhasil")
-                || lower.contains("dana masuk")
-                || lower.contains("top up");
-        boolean outgoing = lower.contains("keluar")
-                || lower.contains("bayar")
-                || lower.contains("transfer ke")
-                || lower.contains("kirim");
-        return mentionsMoney && incoming && !outgoing;
-    }
+    String lower = content.toLowerCase(Locale.ROOT);
+
+    boolean danaNotif = lower.contains("dana");
+    boolean mentionsMoney = lower.contains("rp") || lower.contains("uang") || lower.contains("saldo") || lower.contains("pembayaran");
+    boolean incoming = lower.contains("masuk")
+            || lower.contains("diterima")
+            || lower.contains("menerima")
+            || lower.contains("pembayaran masuk")
+            || lower.contains("dana bisnis");
+
+    boolean outgoing = lower.contains("transfer ke")
+            || lower.contains("kirim uang")
+            || lower.contains("uang keluar");
+
+    return danaNotif && mentionsMoney && incoming && !outgoing;
+}
 
     private static long extractAmount(String content) {
         Matcher matcher = AMOUNT_PATTERN.matcher(content);
