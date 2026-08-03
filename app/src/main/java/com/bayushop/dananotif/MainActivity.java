@@ -1,12 +1,14 @@
 package com.bayushop.dananotif;
 
+import android.Manifest;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.view.Gravity;
-import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -24,6 +26,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        startGatewayService();
+        requestNotificationPermission();
 
         SharedPreferences prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
 
@@ -62,7 +67,10 @@ public class MainActivity extends Activity {
         root.addView(secretInput, matchWrap());
 
         Button save = button("Simpan Setting");
-        save.setOnClickListener(v -> saveSettings());
+        save.setOnClickListener(v -> {
+            saveSettings();
+            startGatewayService();
+        });
         root.addView(save, matchWrap());
 
         Button access = button("Buka Akses Notifikasi");
@@ -72,18 +80,26 @@ public class MainActivity extends Activity {
         Button test = button("Test Webhook");
         test.setOnClickListener(v -> {
             saveSettings();
+            startGatewayService();
             DanaNotificationService.sendTestWebhook(this);
         });
         root.addView(test, matchWrap());
 
         TextView note = new TextView(this);
-        note.setText("Aktifkan akses notifikasi untuk app ini. App hanya memproses notifikasi dari package id.dana.");
+        note.setText("Aktifkan akses notifikasi untuk app ini. App memproses notifikasi DANA/DANA Bisnis yang terlihat seperti pembayaran masuk.");
         note.setTextSize(13);
         note.setTextColor(0xFF5F6B63);
         note.setPadding(0, 28, 0, 0);
         root.addView(note, matchWrap());
 
         setContentView(root);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        startGatewayService();
+        DanaNotificationService.scanActiveNotificationsFromService();
     }
 
     private void saveSettings() {
@@ -93,6 +109,22 @@ public class MainActivity extends Activity {
                 .putString(KEY_SECRET, secretInput.getText().toString().trim())
                 .apply();
         Toast.makeText(this, "Setting tersimpan", Toast.LENGTH_SHORT).show();
+    }
+
+    private void startGatewayService() {
+        Intent intent = new Intent(this, GatewayForegroundService.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
+    private void requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 7002);
+        }
     }
 
     private Button button(String text) {
