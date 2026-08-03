@@ -19,18 +19,69 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class DanaNotificationService extends NotificationListenerService {
-    private static final String DANA_PACKAGE = "id.dana";
     private static final Pattern AMOUNT_PATTERN = Pattern.compile(
             "(?:Rp\\s*)?([0-9]{1,3}(?:[.,][0-9]{3})+|[0-9]+)",
             Pattern.CASE_INSENSITIVE
     );
+
     private static final Set<String> recentKeys = new HashSet<>();
+    private static DanaNotificationService activeService;
+
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        activeService = this;
+    }
+
+    @Override
+    public void onDestroy() {
+        if (activeService == this) {
+            activeService = null;
+        }
+        super.onDestroy();
+    }
+
+    @Override
+    public void onListenerConnected() {
+        super.onListenerConnected();
+        activeService = this;
+        scanActiveNotifications();
+    }
 
     @Override
     public void onNotificationPosted(StatusBarNotification sbn) {
+        processNotification(sbn);
+    }
+
+    static void scanActiveNotificationsFromService() {
+        DanaNotificationService service = activeService;
+        if (service != null) {
+            service.scanActiveNotifications();
+        }
+    }
+
+    private void scanActiveNotifications() {
+        StatusBarNotification[] notifications;
+
+        try {
+            notifications = getActiveNotifications();
+        } catch (Exception ignored) {
+            return;
+        }
+
+        if (notifications == null) {
+            return;
+        }
+
+        for (StatusBarNotification sbn : notifications) {
+            processNotification(sbn);
+        }
+    }
+
+    private void processNotification(StatusBarNotification sbn) {
         if (sbn == null) {
-    return;
-}
+            return;
+        }
 
         Notification notification = sbn.getNotification();
         if (notification == null || notification.extras == null) {
@@ -41,7 +92,8 @@ public class DanaNotificationService extends NotificationListenerService {
         String title = safeText(extras.getCharSequence(Notification.EXTRA_TITLE));
         String text = safeText(extras.getCharSequence(Notification.EXTRA_TEXT));
         String bigText = safeText(extras.getCharSequence(Notification.EXTRA_BIG_TEXT));
-        String content = (title + " " + text + " " + bigText).trim();
+        String packageName = safeText(sbn.getPackageName());
+        String content = (packageName + " " + title + " " + text + " " + bigText).trim();
 
         if (!looksLikeIncomingPayment(content)) {
             return;
@@ -52,18 +104,21 @@ public class DanaNotificationService extends NotificationListenerService {
             return;
         }
 
-        String dedupeKey = sbn.getPackageName() + "|" + sbn.getPostTime() + "|" + amount + "|" + content.hashCode();
+        String dedupeKey = packageName + "|" + sbn.getPostTime() + "|" + amount + "|" + content.hashCode();
+
         synchronized (recentKeys) {
             if (recentKeys.contains(dedupeKey)) {
                 return;
             }
+
             recentKeys.add(dedupeKey);
+
             if (recentKeys.size() > 100) {
                 recentKeys.clear();
             }
         }
 
-        sendWebhook(this, amount, title, text, bigText, sbn.getPostTime(), false);
+        sendWebhook(this, amount, title, text, bigText, packageName, sbn.getPostTime(), false);
     }
 
     static void sendTestWebhook(Context context) {
@@ -73,6 +128,7 @@ public class DanaNotificationService extends NotificationListenerService {
                 "DANA",
                 "Uang masuk Rp10.047",
                 "Test webhook dari DANA Notif Gateway",
+                "test",
                 System.currentTimeMillis(),
                 true
         );
@@ -84,6 +140,7 @@ public class DanaNotificationService extends NotificationListenerService {
             String title,
             String text,
             String bigText,
+            String packageName,
             long postTime,
             boolean test
     ) {
@@ -105,6 +162,7 @@ public class DanaNotificationService extends NotificationListenerService {
                 + "\"title\":" + quote(title) + ","
                 + "\"text\":" + quote(text) + ","
                 + "\"big_text\":" + quote(bigText) + ","
+                + "\"package_name\":" + quote(packageName) + ","
                 + "\"post_time\":" + postTime
                 + "}";
 
@@ -117,19 +175,23 @@ public class DanaNotificationService extends NotificationListenerService {
                 conn.setDoOutput(true);
                 conn.setRequestProperty("Content-Type", "application/json");
                 conn.setRequestProperty("User-Agent", "DanaNotifGateway/1.0");
+
                 if (!secret.isEmpty()) {
                     conn.setRequestProperty("X-Webhook-Secret", secret);
                 }
 
                 byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+
                 try (OutputStream os = conn.getOutputStream()) {
                     os.write(bytes);
                 }
 
                 int code = conn.getResponseCode();
+
                 if (test) {
                     showToast(context, "Webhook test status: " + code);
                 }
+
                 conn.disconnect();
             } catch (Exception e) {
                 if (test) {
@@ -140,36 +202,49 @@ public class DanaNotificationService extends NotificationListenerService {
     }
 
     private static boolean looksLikeIncomingPayment(String content) {
-    String lower = content.toLowerCase(Locale.ROOT);
+        String lower = content.toLowerCase(Locale.ROOT);
 
-    boolean danaNotif = lower.contains("dana");
-    boolean mentionsMoney = lower.contains("rp") || lower.contains("uang") || lower.contains("saldo") || lower.contains("pembayaran");
-    boolean incoming = lower.contains("masuk")
-            || lower.contains("diterima")
-            || lower.contains("menerima")
-            || lower.contains("pembayaran masuk")
-            || lower.contains("dana bisnis");
+        boolean danaNotif = lower.contains("dana")
+                || lower.contains("id.dana")
+                || lower.contains("dana bisnis");
 
-    boolean outgoing = lower.contains("transfer ke")
-            || lower.contains("kirim uang")
-            || lower.contains("uang keluar");
+        boolean mentionsMoney = lower.contains("rp")
+                || lower.contains("uang")
+                || lower.contains("saldo")
+                || lower.contains("pembayaran");
 
-    return danaNotif && mentionsMoney && incoming && !outgoing;
-}
+        boolean incoming = lower.contains("masuk")
+                || lower.contains("diterima")
+                || lower.contains("menerima")
+                || lower.contains("pembayaran masuk")
+                || lower.contains("dana bisnis")
+                || lower.contains("dana masuk")
+                || lower.contains("top up");
+
+        boolean outgoing = lower.contains("transfer ke")
+                || lower.contains("kirim uang")
+                || lower.contains("uang keluar");
+
+        return danaNotif && mentionsMoney && incoming && !outgoing;
+    }
 
     private static long extractAmount(String content) {
         Matcher matcher = AMOUNT_PATTERN.matcher(content);
         long best = 0;
+
         while (matcher.find()) {
             String raw = matcher.group(1).replace(".", "").replace(",", "");
+
             try {
                 long value = Long.parseLong(raw);
+
                 if (value > best) {
                     best = value;
                 }
             } catch (NumberFormatException ignored) {
             }
         }
+
         return best;
     }
 
@@ -181,6 +256,7 @@ public class DanaNotificationService extends NotificationListenerService {
         if (value == null) {
             value = "";
         }
+
         return "\"" + value
                 .replace("\\", "\\\\")
                 .replace("\"", "\\\"")
